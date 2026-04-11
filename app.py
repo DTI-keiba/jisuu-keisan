@@ -24,6 +24,7 @@ from parse_timetable_pdf import (
     extract_weekly_class_weekday_counts,
     parse_label_grade_overrides,
     project_lessons_in_period,
+    slot_key_sort_key,
     split_slot_key_for_display,
 )
 
@@ -407,7 +408,7 @@ elif page == _MENU_TT:
             st.caption("時間割から曜日見出しを検出できなかった場合、期間集計は **概算（÷5按分）** になります。")
 
         rows_out: list[dict] = []
-        for k in sorted(merged.keys(), key=lambda x: (-merged.get(x, 0), x)):
+        for k in sorted(merged.keys(), key=slot_key_sort_key):
             c_part, s_part = split_slot_key_for_display(k)
             rowd: dict = {
                 "区分（集計キー）": k,
