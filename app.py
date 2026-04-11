@@ -30,31 +30,105 @@ from parse_timetable_pdf import (
 _MENU_CAL = "行事予定（学年・曜日）"
 _MENU_TT = "時間割（担当コマ）"
 
+
+def _cal_fingerprint(name: str, n_rows: int, d_min, d_max) -> str:
+    return f"{name}|{n_rows}|{d_min}|{d_max}"
+
+
+def _apply_new_calendar(rows: list, source_name: str) -> None:
+    if not rows:
+        return
+    ds = [row_date(r) for r in rows]
+    d_min, d_max = min(ds), max(ds)
+    fp = _cal_fingerprint(source_name, len(rows), d_min, d_max)
+    if st.session_state.get("_cal_fp") != fp:
+        st.session_state["_cal_fp"] = fp
+        st.session_state["period_range"] = (d_min, d_max)
+        st.rerun()
+
+
+def _period_bounds() -> tuple:
+    """サイドバーの period_range（開始・終了の2日）からタプルを返す。"""
+    pr = st.session_state.get("period_range")
+    if isinstance(pr, (tuple, list)) and len(pr) == 2:
+        return pr[0], pr[1]
+    if isinstance(pr, (tuple, list)) and len(pr) == 1:
+        return pr[0], pr[0]
+    return None, None
+
+
 st.set_page_config(page_title="行事予定・時間割 集計アプリ", layout="wide")
+
+cal_rows = list(st.session_state.get("cal_rows") or [])
 
 with st.sidebar:
     st.header("メニュー")
     page = st.radio("画面を選ぶ", [_MENU_CAL, _MENU_TT], key="app_nav")
     st.caption("PDFを読み取り、ここで集計します。")
     st.divider()
+
+    st.subheader("集計期間")
+    if cal_rows:
+        cds = [row_date(r) for r in cal_rows]
+        dmin, dmax = min(cds), max(cds)
+        if "period_range" not in st.session_state:
+            st.session_state.period_range = (dmin, dmax)
+        pr = st.session_state.period_range
+        if (
+            not isinstance(pr, (tuple, list))
+            or len(pr) != 2
+            or pr[0] is None
+            or pr[1] is None
+        ):
+            st.session_state.period_range = (dmin, dmax)
+            pr = st.session_state.period_range
+        ps, pe = pr[0], pr[1]
+        ps = max(dmin, min(ps, dmax))
+        pe = max(dmin, min(pe, dmax))
+        if ps > pe:
+            ps, pe = dmin, dmax
+        if (ps, pe) != tuple(pr):
+            st.session_state.period_range = (ps, pe)
+
+        st.date_input(
+            "集計期間（カレンダーで選択）",
+            min_value=dmin,
+            max_value=dmax,
+            key="period_range",
+            help="クリックするとカレンダーが開きます。開始日と終了日をタップして範囲を指定してください（キーボード入力は使わずに選べます）。",
+        )
+        st.caption(f"行事予定PDFの全日付: **{dmin}** ～ **{dmax}**")
+        st.caption("行事予定・時間割の期間集計の両方に使われます。")
+    else:
+        st.caption("行事予定PDFを読み込むと、ここで期間を設定できます。")
+
+    st.divider()
     st.markdown("**起動**  \n`streamlit run app.py`")
 
 st.title("行事予定・時間割 集計アプリ")
 st.caption("ブラウザでPDFをアップロードして利用します（スプレッドシート単体では同じPDFは読み取れません）。")
 
+start_d, end_d = _period_bounds()
+
 # ----- 行事予定 -----
 if page == _MENU_CAL:
     st.caption("1年・2年・2国・3年列の 〇・○・◯ を授業日として、暦に沿って学年ごと・曜日ごとに集計します。")
+    st.info("**集計期間**は左サイドバーで変更できます。", icon="📅")
     up_cal = st.file_uploader("行事予定PDF", type=["pdf"], key="cal_pdf")
 
-    if up_cal is None:
-        st.info("教員用行事予定などのPDFをアップロードしてください。")
-    else:
-        data = up_cal.read()
-        rows, warnings = parse_pdf(io.BytesIO(data))
+    rows = None
+    warnings: list[str] = []
+    if up_cal is not None:
+        rows, warnings = parse_pdf(io.BytesIO(up_cal.read()))
         if rows:
             st.session_state["cal_rows"] = rows
+            _apply_new_calendar(rows, up_cal.name)
+    elif cal_rows:
+        rows = cal_rows
 
+    if up_cal is None and not cal_rows:
+        st.info("教員用行事予定などのPDFをアップロードしてください。")
+    else:
         if warnings:
             with st.expander("警告・メモ（曜日不一致など）", expanded=False):
                 for w in warnings:
@@ -62,29 +136,11 @@ if page == _MENU_CAL:
 
         if not rows:
             st.error("集計できる行がありません。PDFの形式が想定と異なる可能性があります。")
+        elif start_d is None or end_d is None:
+            st.warning("サイドバーで集計期間を確定してください。")
         else:
-            ds = [row_date(r) for r in rows]
-            d_min, d_max = min(ds), max(ds)
-            c1, c2 = st.columns(2)
-            with c1:
-                start_d = st.date_input(
-                    "集計開始日（含む）",
-                    value=d_min,
-                    min_value=d_min,
-                    max_value=d_max,
-                    key="cal_start",
-                )
-            with c2:
-                end_d = st.date_input(
-                    "集計終了日（含む）",
-                    value=d_max,
-                    min_value=d_min,
-                    max_value=d_max,
-                    key="cal_end",
-                )
-
             if start_d > end_d:
-                st.error("開始日は終了日以前にしてください。")
+                st.error("開始日は終了日以前にしてください（サイドバーで修正）。")
                 st.stop()
 
             rows_f = filter_rows_by_date_range(rows, start_d, end_d)
@@ -152,8 +208,13 @@ elif page == _MENU_TT:
     st.caption(
         "個人の時間割PDFからマスを読み取り、**クラス＋科目**が違えば別項目として数えます（例: 1年1組／英コミュ、1年1組／総合、1年1組／LHR）。"
         " **※だけのマスは休みのためカウントしません。** 総合・LHRも **組表記があれば同じ行にクラス** を付けます（組だけないときはクラス欄に「—」）。"
-        " 期間集計には行事予定PDFが必要です（左の「行事予定」で読み込むか、下でアップロード）。"
+        " **期間集計は左サイドバーの「集計期間」を使います**（行事予定を読み込んだあと）。"
     )
+    if cal_rows:
+        st.info(
+            f"現在の集計期間（サイドバーと共通）: **{start_d}** ～ **{end_d}**",
+            icon="📅",
+        )
     use_ocr = st.checkbox(
         "OCRを使う（スキャン・画像だけのPDF。Tesseract + 日本語データが必要）",
         value=False,
@@ -168,7 +229,7 @@ elif page == _MENU_TT:
     up_tt = st.file_uploader("時間割PDF", type=["pdf"], key="tt_pdf")
 
     cal_upload_tt = st.file_uploader(
-        "行事予定PDF（期間集計用・省略可）",
+        "行事予定PDF（省略可・行事予定画面と同じデータに追加）",
         type=["pdf"],
         key="tt_cal_pdf",
         help="「行事予定」画面で既に読み込んでいれば不要です。",
@@ -181,6 +242,7 @@ elif page == _MENU_TT:
                     st.text(w)
         if cr:
             st.session_state["cal_rows"] = cr
+            _apply_new_calendar(cr, cal_upload_tt.name)
         elif not st.session_state.get("cal_rows"):
             st.warning("行事予定PDFを解釈できませんでした。")
 
@@ -206,30 +268,12 @@ elif page == _MENU_TT:
         key="tt_paste",
     )
 
-    cal_rows = st.session_state.get("cal_rows") or []
-    if cal_rows:
-        cds = [row_date(r) for r in cal_rows]
-        cd_min, cd_max = min(cds), max(cds)
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            p_start = st.date_input(
-                "期間集計・開始日",
-                value=cd_min,
-                min_value=cd_min,
-                max_value=cd_max,
-                key="tt_pstart",
-            )
-        with pc2:
-            p_end = st.date_input(
-                "期間集計・終了日",
-                value=cd_max,
-                min_value=cd_min,
-                max_value=cd_max,
-                key="tt_pend",
-            )
-    else:
-        p_start = p_end = None
-        st.info("期間内のコマ数を出すには、左メニュー「行事予定」でPDFを読み込むか、上で行事予定PDFをアップロードしてください。")
+    cal_rows = list(st.session_state.get("cal_rows") or [])
+    p_start, p_end = start_d, end_d
+    if not cal_rows:
+        st.info("期間内のコマ数を出すには、行事予定PDFを読み込んでください（左「行事予定」または上のアップロード）。")
+    elif p_start is None or p_end is None:
+        st.info("サイドバーで集計期間を設定してください。")
 
     if up_tt is None and not pasted.strip():
         st.info("時間割のPDFをアップロードするか、テキストを貼り付けてください。")
@@ -298,7 +342,7 @@ elif page == _MENU_TT:
         )
         if cal_rows and p_start is not None and p_end is not None:
             if p_start > p_end:
-                st.error("期間の開始日は終了日以前にしてください。")
+                st.error("期間の開始日は終了日以前にしてください（サイドバーで修正）。")
             else:
                 period_counts, period_note = project_lessons_in_period(
                     weekly_class_weekday=weekly_grid,
