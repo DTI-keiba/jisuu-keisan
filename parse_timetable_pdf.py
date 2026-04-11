@@ -129,6 +129,26 @@ def split_slot_key_for_display(key: str) -> tuple[str, str]:
     return key, ""
 
 
+def slot_key_sort_key(key: str) -> tuple:
+    """
+    集計表の並び用キー。
+    1年1組→1年2組→…→2年…→3年…、続いてその他のクラス表記（文字列順）、
+    最後に組なし（—）。同一クラス内は科目・内容の文字列順。
+    """
+    c_part, s_part = split_slot_key_for_display(key)
+    c = c_part.strip()
+    subj = s_part.strip()
+    compact = re.sub(r"\s+", "", c)
+    compact = "".join(_to_ascii_digit(ch) if ch in "０１２３４５６７８９" else ch for ch in compact)
+    m = re.fullmatch(r"([123])年(\d+)組", compact)
+    if m:
+        y, ku = int(m.group(1)), int(m.group(2))
+        return (0, y, ku, subj, key)
+    if c == NO_CLASS_PLACEHOLDER:
+        return (2, 0, 0, subj, key)
+    return (1, c, subj, key)
+
+
 def detect_slot_labels_from_segments(
     segments: list[str],
     extra_labels: list[str] | None = None,
