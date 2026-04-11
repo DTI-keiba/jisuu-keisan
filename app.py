@@ -44,11 +44,17 @@ def _apply_new_calendar(rows: list, source_name: str) -> None:
     if st.session_state.get("_cal_fp") != fp:
         st.session_state["_cal_fp"] = fp
         st.session_state["period_range"] = (d_min, d_max)
+        st.session_state["period_start"] = d_min
+        st.session_state["period_end"] = d_max
         st.rerun()
 
 
 def _period_bounds() -> tuple:
-    """サイドバーの period_range（開始・終了の2日）からタプルを返す。"""
+    """サイドバーの開始日・終了日（または period_range）からタプルを返す。"""
+    ps = st.session_state.get("period_start")
+    pe = st.session_state.get("period_end")
+    if ps is not None and pe is not None:
+        return ps, pe
     pr = st.session_state.get("period_range")
     if isinstance(pr, (tuple, list)) and len(pr) == 2:
         return pr[0], pr[1]
@@ -89,13 +95,43 @@ with st.sidebar:
             ps, pe = dmin, dmax
         if (ps, pe) != tuple(pr):
             st.session_state.period_range = (ps, pe)
+            pr = st.session_state.period_range
 
-        st.date_input(
-            "集計期間（カレンダーで選択）",
-            min_value=dmin,
-            max_value=dmax,
-            key="period_range",
-            help="クリックするとカレンダーが開きます。開始日と終了日をタップして範囲を指定してください（キーボード入力は使わずに選べます）。",
+        if "period_start" not in st.session_state:
+            st.session_state.period_start = pr[0]
+        if "period_end" not in st.session_state:
+            st.session_state.period_end = pr[1]
+
+        ps = max(dmin, min(st.session_state.period_start, dmax))
+        pe = max(dmin, min(st.session_state.period_end, dmax))
+        if ps > pe:
+            ps, pe = dmin, dmax
+        if ps != st.session_state.period_start:
+            st.session_state.period_start = ps
+        if pe != st.session_state.period_end:
+            st.session_state.period_end = pe
+        st.session_state.period_range = (st.session_state.period_start, st.session_state.period_end)
+
+        tab_s, tab_e = st.tabs(["開始日", "終了日"])
+        with tab_s:
+            st.date_input(
+                "開始日",
+                min_value=dmin,
+                max_value=dmax,
+                key="period_start",
+                help="行事予定PDFの範囲内で、集計のはじめの日を選びます。",
+            )
+        with tab_e:
+            st.date_input(
+                "終了日",
+                min_value=dmin,
+                max_value=dmax,
+                key="period_end",
+                help="行事予定PDFの範囲内で、集計の終わりの日を選びます。",
+            )
+        st.session_state.period_range = (
+            st.session_state.period_start,
+            st.session_state.period_end,
         )
         st.caption(f"行事予定PDFの全日付: **{dmin}** ～ **{dmax}**")
         st.caption("行事予定・時間割の期間集計の両方に使われます。")
