@@ -77,6 +77,47 @@ SLOT_KEY_SEP = "／"
 NO_CLASS_PLACEHOLDER = "—"
 
 
+def _weekday_header_only(seg: str) -> bool:
+    """セル全体が曜日見出しだけなら True（集計対象外）。"""
+    t = re.sub(r"[ \u3000\n]+", "", str(seg).strip())
+    if not t:
+        return False
+    if len(t) == 1 and t in WEEKDAYS_JA:
+        return True
+    for wd in WEEKDAYS_JA:
+        if t in (f"{wd}曜", f"{wd}曜日"):
+            return True
+    return False
+
+
+def _period_header_only(seg: str) -> bool:
+    """セル全体が時限・コマ番号の見出しだけなら True（集計対象外）。"""
+    if _RE_NEN_KUMI.search(seg) or _RE_HYPHEN.search(seg):
+        return False
+    raw = str(seg).strip()
+    if "年" in raw or "組" in raw:
+        return False
+    comp = re.sub(r"[ \u3000\n]+", "", raw)
+    comp = "".join(_to_ascii_digit(c) if c in "０１２３４５６７８９" else c for c in comp)
+    if re.fullmatch(r"[0-9]{1,2}", comp):
+        n = int(comp)
+        return 1 <= n <= 15
+    m = re.fullmatch(r"([0-9]{1,2})(限|コマ|時限)", comp)
+    if m:
+        n = int(m.group(1))
+        return 1 <= n <= 15
+    m = re.fullmatch(r"第([0-9]{1,2})(限|コマ|時限)", comp)
+    if m:
+        n = int(m.group(1))
+        return 1 <= n <= 15
+    return False
+
+
+def is_timetable_axis_label_only(seg: str) -> bool:
+    """曜日見出し・何コマ目の数字だけのマスは集計に含めない。"""
+    return _weekday_header_only(seg) or _period_header_only(seg)
+
+
 def slot_keys_from_cell(seg: str, extra_labels: list[str] | None = None) -> list[str]:
     """
     マス1つ分の文字列から、区別して数えるスロットキーを返す。
@@ -88,6 +129,9 @@ def slot_keys_from_cell(seg: str, extra_labels: list[str] | None = None) -> list
     seg = str(seg).replace("\n", " ").strip()
     seg = re.sub(r"[ \u3000]+", " ", seg)
     if not seg:
+        return []
+
+    if is_timetable_axis_label_only(seg):
         return []
 
     compact = re.sub(r"\s+", "", seg)
@@ -411,7 +455,7 @@ def _accumulate_grid_from_table(
                 seg = str(cell).replace("\n", " ").strip()
                 if not seg:
                     continue
-                if _cell_to_weekday(cell) is not None and len(seg) <= 4:
+                if is_timetable_axis_label_only(seg):
                     continue
                 for key in slot_keys_from_cell(seg, extra_labels):
                     counts[(key, wd)] = counts.get((key, wd), 0) + 1
@@ -434,7 +478,7 @@ def _accumulate_grid_from_table(
                 seg = str(cell).replace("\n", " ").strip()
                 if not seg:
                     continue
-                if _cell_to_weekday(cell) is not None and len(seg) <= 4:
+                if is_timetable_axis_label_only(seg):
                     continue
                 for key in slot_keys_from_cell(seg, extra_labels):
                     counts[(key, wd)] = counts.get((key, wd), 0) + 1
