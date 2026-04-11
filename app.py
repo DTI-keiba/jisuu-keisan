@@ -437,13 +437,6 @@ elif page == _MENU_TT:
                 )
         else:
             st.dataframe(out_df, use_container_width=True, hide_index=True)
-            chart_col = (
-                "期間内コマ（推定）"
-                if period_projection_ok and "期間内コマ（推定）" in out_df.columns
-                else "PDF検出コマ"
-            )
-            if chart_col in out_df.columns:
-                st.bar_chart(out_df.set_index("区分（集計キー）")[[chart_col]])
 
         if period_note:
             st.info(period_note)
