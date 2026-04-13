@@ -148,6 +148,15 @@ def totals(agg: dict[str, dict[str, int]]) -> dict[str, int]:
     return {g: sum(agg[g].values()) for g in GRADES}
 
 
+def weekday_teaching_totals(agg: dict[str, dict[str, int]]) -> dict[str, int]:
+    """曜日ごとの「〇・○・◯」の個数合計（全学年を足し上げた値）。"""
+    out = {wd: 0 for wd in WEEKDAYS_JA}
+    for g in GRADES:
+        for wd in WEEKDAYS_JA:
+            out[wd] += agg[g][wd]
+    return out
+
+
 def row_date(row: CalendarRow) -> date:
     return date(row.year, row.month, row.day)
 
