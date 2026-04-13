@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import uuid
 
 import pandas as pd
 import streamlit as st
@@ -16,6 +17,7 @@ from parse_calendar_pdf import (
     row_date,
     teaching_days_per_grade_in_range,
     totals,
+    weekday_teaching_totals,
 )
 from parse_timetable_pdf import (
     aggregate_weekly_grid_to_class_totals,
@@ -50,6 +52,82 @@ def _apply_new_calendar(rows: list, source_name: str) -> None:
         st.rerun()
 
 
+def _register_calendar_in_library(rows: list, source_name: str) -> None:
+    """解析済み行事予定をライブラリに登録し、選択中にする（同一内容は上書き）。"""
+    if not rows:
+        return
+    ds = [row_date(r) for r in rows]
+    d_min, d_max = min(ds), max(ds)
+    fp = _cal_fingerprint(source_name, len(rows), d_min, d_max)
+    lib: list[dict] = st.session_state.setdefault("cal_library", [])
+    for e in lib:
+        if e.get("fingerprint") == fp:
+            e["rows"] = list(rows)
+            e["name"] = source_name
+            e["d_min"] = d_min
+            e["d_max"] = d_max
+            e["n"] = len(rows)
+            st.session_state["cal_active_id"] = e["id"]
+            st.session_state["cal_rows"] = list(rows)
+            st.session_state["cal_library_select"] = e["id"]
+            _apply_new_calendar(rows, source_name)
+            return
+    eid = uuid.uuid4().hex[:10]
+    lib.append(
+        {
+            "id": eid,
+            "name": source_name,
+            "rows": list(rows),
+            "fingerprint": fp,
+            "d_min": d_min,
+            "d_max": d_max,
+            "n": len(rows),
+        }
+    )
+    st.session_state["cal_active_id"] = eid
+    st.session_state["cal_rows"] = list(rows)
+    st.session_state["cal_library_select"] = eid
+    _apply_new_calendar(rows, source_name)
+
+
+def _migrate_cal_library_from_session_rows() -> None:
+    """古いセッション（cal_rows のみ）からライブラリを1件だけ作る。"""
+    lib: list[dict] = st.session_state.setdefault("cal_library", [])
+    if lib:
+        return
+    rows = st.session_state.get("cal_rows")
+    if not rows:
+        return
+    ds = [row_date(r) for r in rows]
+    d_min, d_max = min(ds), max(ds)
+    eid = uuid.uuid4().hex[:10]
+    fp = _cal_fingerprint("読み込み済み", len(rows), d_min, d_max)
+    lib.append(
+        {
+            "id": eid,
+            "name": "読み込み済み",
+            "rows": list(rows),
+            "fingerprint": fp,
+            "d_min": d_min,
+            "d_max": d_max,
+            "n": len(rows),
+        }
+    )
+    st.session_state["cal_active_id"] = eid
+    st.session_state["cal_library_select"] = eid
+
+
+def _on_cal_library_select_change() -> None:
+    eid = st.session_state.get("cal_library_select")
+    if not eid:
+        return
+    for e in st.session_state.get("cal_library") or []:
+        if e["id"] == eid:
+            st.session_state["cal_rows"] = list(e["rows"])
+            _apply_new_calendar(e["rows"], e["name"])
+            return
+
+
 def _period_bounds() -> tuple:
     """サイドバーの開始日・終了日（または period_range）からタプルを返す。"""
     ps = st.session_state.get("period_start")
@@ -65,6 +143,10 @@ def _period_bounds() -> tuple:
 
 
 st.set_page_config(page_title="行事予定・時間割 集計アプリ", layout="wide")
+
+st.session_state.setdefault("cal_library", [])
+st.session_state.setdefault("cal_active_id", None)
+_migrate_cal_library_from_session_rows()
 
 cal_rows = list(st.session_state.get("cal_rows") or [])
 
@@ -151,15 +233,42 @@ start_d, end_d = _period_bounds()
 if page == _MENU_CAL:
     st.caption("1年・2年・2国・3年列の 〇・○・◯ を授業日として、暦に沿って学年ごと・曜日ごとに集計します。")
     st.info("**集計期間**は左サイドバーで変更できます。", icon="📅")
-    up_cal = st.file_uploader("行事予定PDF", type=["pdf"], key="cal_pdf")
+
+    cal_lib: list[dict] = list(st.session_state.get("cal_library") or [])
+    if cal_lib:
+        ids = [e["id"] for e in cal_lib]
+        labels = {e["id"]: f"{e['name']}（{e['d_min']}～{e['d_max']}・{e['n']}日）" for e in cal_lib}
+        if st.session_state.get("cal_library_select") not in ids:
+            st.session_state.cal_library_select = (
+                st.session_state.cal_active_id
+                if st.session_state.cal_active_id in ids
+                else ids[0]
+            )
+        default_ix = ids.index(st.session_state.cal_library_select)
+        st.selectbox(
+            "保存済みの行事予定（このセッション内）",
+            options=ids,
+            index=default_ix,
+            format_func=lambda x: labels.get(x, x),
+            key="cal_library_select",
+            on_change=_on_cal_library_select_change,
+            help="PDFを読み取った一覧から選ぶと、その内容で集計します。ブラウザを閉じると一覧は消えます。",
+        )
+
+    up_cal = st.file_uploader(
+        "行事予定PDF（新規追加・同じ内容は上書き）",
+        type=["pdf"],
+        key="cal_pdf",
+    )
 
     rows = None
     warnings: list[str] = []
     if up_cal is not None:
+        up_cal.seek(0)
         rows, warnings = parse_pdf(io.BytesIO(up_cal.read()))
         if rows:
-            st.session_state["cal_rows"] = rows
-            _apply_new_calendar(rows, up_cal.name)
+            _register_calendar_in_library(rows, up_cal.name)
+        rows = list(st.session_state.get("cal_rows") or [])
     elif cal_rows:
         rows = cal_rows
 
@@ -203,6 +312,24 @@ if page == _MENU_CAL:
             st.subheader("集計結果（期間内）")
             st.dataframe(df, use_container_width=True, hide_index=True)
 
+            wd_tot = weekday_teaching_totals(agg)
+            st.subheader("曜日別の授業数（期間内・学年別）")
+            st.caption(
+                "各曜日の **〇・○・◯ の個数** を学年ごとに示し、右端の合計は4学年の足し算です。"
+                "（同じ日に複数学年が授業日なら、その分だけ大きくなります。）"
+            )
+            df_wd = pd.DataFrame(
+                [
+                    {
+                        "曜日": wd,
+                        **{g: agg[g][wd] for g in GRADES},
+                        "合計（全学年）": wd_tot[wd],
+                    }
+                    for wd in WEEKDAYS_JA
+                ]
+            )
+            st.dataframe(df_wd, use_container_width=True, hide_index=True)
+
             chart_df = pd.DataFrame(
                 {g: [agg[g][wd] for wd in WEEKDAYS_JA] for g in GRADES},
                 index=list(WEEKDAYS_JA),
@@ -238,6 +365,15 @@ if page == _MENU_CAL:
                 file_name="jukunichi_by_weekday_range.csv",
                 mime="text/csv",
                 key="dl_cal",
+            )
+            csv_wd = io.StringIO()
+            df_wd.to_csv(csv_wd, index=False, encoding="utf-8-sig")
+            st.download_button(
+                "CSVをダウンロード（曜日別・学年別）",
+                data=csv_wd.getvalue().encode("utf-8-sig"),
+                file_name="jukunichi_weekday_by_grade.csv",
+                mime="text/csv",
+                key="dl_cal_wd",
             )
 
 # ----- 時間割 -----
@@ -278,8 +414,7 @@ elif page == _MENU_TT:
                 for w in wcal:
                     st.text(w)
         if cr:
-            st.session_state["cal_rows"] = cr
-            _apply_new_calendar(cr, cal_upload_tt.name)
+            _register_calendar_in_library(cr, cal_upload_tt.name)
         elif not st.session_state.get("cal_rows"):
             st.warning("行事予定PDFを解釈できませんでした。")
 
