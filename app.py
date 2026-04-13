@@ -142,6 +142,33 @@ def _period_bounds() -> tuple:
     return None, None
 
 
+def _calendar_agg_tables(rows_f: list) -> tuple[pd.DataFrame, pd.DataFrame, dict, dict]:
+    """
+    期間内の行事予定行から、学年×曜日の表・曜日×学年の表と agg / tot を返す。
+    rows_f: filter_rows_by_date_range 済みの CalendarRow のリスト
+    """
+    agg = aggregate_by_weekday(rows_f)
+    tot = totals(agg)
+    df_grade_rows = pd.DataFrame(
+        [
+            {**{"学年": g}, **{wd: agg[g][wd] for wd in WEEKDAYS_JA}, **{"計": tot[g]}}
+            for g in GRADES
+        ]
+    )
+    wd_tot = weekday_teaching_totals(agg)
+    df_weekday_rows = pd.DataFrame(
+        [
+            {
+                "曜日": wd,
+                **{g: agg[g][wd] for g in GRADES},
+                "合計（全学年）": wd_tot[wd],
+            }
+            for wd in WEEKDAYS_JA
+        ]
+    )
+    return df_grade_rows, df_weekday_rows, agg, tot
+
+
 st.set_page_config(page_title="行事予定・時間割 集計アプリ", layout="wide")
 
 st.session_state.setdefault("cal_library", [])
@@ -300,33 +327,19 @@ if page == _MENU_CAL:
                 + " ".join(f"{g}の授業日 {teach_n[g]}日" for g in GRADES)
             )
 
-            agg = aggregate_by_weekday(rows_f)
-            tot = totals(agg)
+            df, df_wd, agg, tot = _calendar_agg_tables(rows_f)
 
-            df = pd.DataFrame(
-                [
-                    {**{"学年": g}, **{wd: agg[g][wd] for wd in WEEKDAYS_JA}, **{"計": tot[g]}}
-                    for g in GRADES
-                ]
+            st.subheader("学年ごとの曜日別授業数（期間内）")
+            st.caption(
+                "**行が学年**、**列が月〜日**です。セルはその学年がその曜日に **〇・○・◯ だった回数**。"
+                " 列「計」は期間内のその学年の合計です。"
             )
-            st.subheader("集計結果（期間内）")
             st.dataframe(df, use_container_width=True, hide_index=True)
 
-            wd_tot = weekday_teaching_totals(agg)
-            st.subheader("曜日別の授業数（期間内・学年別）")
+            st.subheader("曜日別の授業数（学年別内訳・期間内）")
             st.caption(
-                "各曜日の **〇・○・◯ の個数** を学年ごとに示し、右端の合計は4学年の足し算です。"
-                "（同じ日に複数学年が授業日なら、その分だけ大きくなります。）"
-            )
-            df_wd = pd.DataFrame(
-                [
-                    {
-                        "曜日": wd,
-                        **{g: agg[g][wd] for g in GRADES},
-                        "合計（全学年）": wd_tot[wd],
-                    }
-                    for wd in WEEKDAYS_JA
-                ]
+                "**行が曜日**、**列が学年**です（上の表と同じ数値の見せ方違い）。"
+                "「合計（全学年）」は4学年の足し算です。"
             )
             st.dataframe(df_wd, use_container_width=True, hide_index=True)
 
@@ -572,6 +585,24 @@ elif page == _MENU_TT:
                 )
         else:
             st.dataframe(out_df, use_container_width=True, hide_index=True)
+
+            if (
+                cal_rows
+                and p_start is not None
+                and p_end is not None
+                and p_start <= p_end
+            ):
+                rows_cal_f = filter_rows_by_date_range(cal_rows, p_start, p_end)
+                if rows_cal_f:
+                    st.subheader("学年ごとの曜日別授業数（行事予定・期間内）")
+                    st.caption(
+                        "左の行事予定PDFの〇・○・◯を、**学年×曜日**で数えたものです（サイドバーの期間）。"
+                    )
+                    df_g, df_wd, _, _ = _calendar_agg_tables(rows_cal_f)
+                    st.markdown("**行＝学年、列＝曜日**")
+                    st.dataframe(df_g, use_container_width=True, hide_index=True)
+                    st.markdown("**行＝曜日、列＝学年**")
+                    st.dataframe(df_wd, use_container_width=True, hide_index=True)
 
         if period_note:
             st.info(period_note)
